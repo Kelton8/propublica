@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ProPublica 990 Viewer</title>
+
+<style>
+body{
+font-family:system-ui;
+margin:0;
+padding:30px;
+background:#f7f7f7;
+}
+
+.card{
+background:white;
+padding:25px;
+border-radius:12px;
+box-shadow:0 2px 10px rgba(0,0,0,.08);
+max-width:900px;
+margin:auto;
+}
+
+button{
+background:#059669;
+border:none;
+color:white;
+padding:10px 18px;
+border-radius:8px;
+cursor:pointer;
+font-weight:600;
+}
+
+.secondary{
+background:#e5e7eb;
+color:black;
+margin-left:10px;
+}
+
+pre{
+background:#f3f4f6;
+padding:16px;
+border-radius:8px;
+overflow:auto;
+}
+</style>
+
+</head>
+<body>
+
+<div class="card">
+
+<h2>ProPublica 990 Generator</h2>
+
+<p id="org"></p>
+
+<button id="run">Load Latest Filing</button>
+<button class="secondary" onclick="closeModal()">Done</button>
+
+<pre id="result"></pre>
+
+</div>
+
+<script>
+
+function param(name){
+return new URLSearchParams(location.search).get(name)
+}
+
+const nonprofitUrl = param("nonprofit_explorer_url")
+
+document.getElementById("org").innerText =
+nonprofitUrl || "No ProPublica URL provided"
+
+document.getElementById("run").onclick = async () => {
+
+if(!nonprofitUrl){
+alert("No Nonprofit Explorer URL was passed from HubSpot")
+return
+}
+
+const res = await fetch(
+"/api/propublica-990-parse?url="+encodeURIComponent(nonprofitUrl)
+)
+
+const data = await res.json()
+
+document.getElementById("result").textContent =
+JSON.stringify(data,null,2)
+
+}
+
+function closeModal(){
+window.parent.postMessage(JSON.stringify({action:"DONE"}),"*")
+}
+
+</script>
+
+</body>
+</html>
