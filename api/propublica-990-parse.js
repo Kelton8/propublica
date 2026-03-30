@@ -6,7 +6,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing ProPublica URL" });
     }
 
-    const match = String(url).match(/organizations\/(\d+)/);
+    const match = url.match(/organizations\/(\d+)/);
     if (!match) {
       return res.status(400).json({ error: "Invalid ProPublica URL" });
     }
@@ -17,42 +17,35 @@ export default async function handler(req, res) {
       `https://projects.propublica.org/nonprofits/api/v2/organizations/${ein}.json`
     );
 
-    if (!orgRes.ok) {
-      return res.status(502).json({ error: "Failed to load organization data from ProPublica." });
-    }
-
     const orgData = await orgRes.json();
-    const filings = orgData.filings_with_data || [];
 
-    if (!filings.length) {
+    const filings = orgData.filings_with_data;
+
+    if (!filings || filings.length === 0) {
       return res.status(404).json({ error: "No filings found" });
     }
 
-    const latest = [...filings].sort(
-      (a, b) => Number(b.tax_prd || 0) - Number(a.tax_prd || 0)
-    )[0];
+    const latest = filings[0];
 
-    const objectId = latest.object_id;
-    if (!objectId) {
-      return res.status(404).json({ error: "Could not determine latest filing object id." });
-    }
+    const filingRes = await fetch(
+      `https://projects.propublica.org/nonprofits/api/v2/filings/${latest.object_id}.json`
+    );
 
-    const xmlUrl = `https://projects.propublica.org/nonprofits/download-xml?object_id=${objectId}`;
+    const filingData = await filingRes.json();
+
+    const xmlUrl = filingData.filing.xml_url;
+
     const xmlRes = await fetch(xmlUrl);
-
-    if (!xmlRes.ok) {
-      return res.status(502).json({ error: "Failed to download XML from ProPublica." });
-    }
-
     const xmlText = await xmlRes.text();
 
-    return res.status(200).json({
-      organization: orgData.organization || null,
-      filingYear: latest.tax_prd_yr || null,
+    res.status(200).json({
+      organization: orgData.organization,
+      filingYear: latest.tax_prd_yr,
       xmlUrl,
-      xmlText,
+      xmlText
     });
+
   } catch (err) {
-    return res.status(500).json({ error: err.message || "Unexpected server error." });
+    res.status(500).json({ error: err.message });
   }
 }
