@@ -123,6 +123,111 @@ function getContractorAddress(contractor) {
   return parts.length ? parts.join(" • ") : null;
 }
 
+function detectServiceSignals(parsed) {
+  if (!parsed) return { detectedVendors: [], summarySignals: [], outsourcingLikelihood: "Low" };
+
+  const serviceRules = [
+    {
+      category: "Business Management",
+      patterns: [
+        "business management",
+        "management services",
+        "school management",
+        "charter management",
+        "back office",
+        "business office",
+      ],
+      signal: "Potential outsourced business management relationship",
+    },
+    {
+      category: "Accounting / Financial Services",
+      patterns: [
+        "accounting",
+        "financial services",
+        "finance services",
+        "bookkeeping",
+        "general ledger",
+        "accounts payable",
+        "accounts receivable",
+        "fiscal services",
+        "controller services",
+        "cfo services",
+      ],
+      signal: "Potential outsourced finance or accounting relationship",
+    },
+    {
+      category: "Payroll / HR",
+      patterns: [
+        "payroll",
+        "human resources",
+        "hr services",
+        "benefits administration",
+        "retirement services",
+      ],
+      signal: "Potential outsourced payroll or HR relationship",
+    },
+    {
+      category: "Audit / Tax",
+      patterns: [
+        "audit",
+        "auditing",
+        "tax preparation",
+        "tax services",
+        "assurance services",
+        "financial statement",
+      ],
+      signal: "Professional audit or tax support detected",
+    },
+  ];
+
+  const contractors = parsed.ContractorCompensationGrp || [];
+  const detectedVendors = [];
+  const summarySignals = new Set();
+  let outsourcingScore = 0;
+
+  contractors.forEach((contractor) => {
+    const serviceText = String(contractor.ServicesDesc || "").toLowerCase();
+    if (!serviceText) return;
+
+    serviceRules.forEach((rule) => {
+      const matchedPattern = rule.patterns.find((pattern) => serviceText.includes(pattern));
+      if (!matchedPattern) return;
+
+      detectedVendors.push({
+        vendorName:
+          contractor.BusinessNameLine1Txt ||
+          contractor.PersonNm ||
+          `Contractor ${contractor.id}`,
+        category: rule.category,
+        reason: `Matched service description: "${matchedPattern}"`,
+        services: contractor.ServicesDesc,
+        compensation: contractor.CompensationAmt,
+      });
+
+      summarySignals.add(rule.signal);
+
+      if (
+        rule.category === "Business Management" ||
+        rule.category === "Accounting / Financial Services"
+      ) {
+        outsourcingScore += 2;
+      } else {
+        outsourcingScore += 1;
+      }
+    });
+  });
+
+  let outsourcingLikelihood = "Low";
+  if (outsourcingScore >= 4) outsourcingLikelihood = "High";
+  else if (outsourcingScore >= 2) outsourcingLikelihood = "Medium";
+
+  return {
+    detectedVendors,
+    summarySignals: [...summarySignals],
+    outsourcingLikelihood,
+  };
+}
+
 function getGrade(parsed) {
   const revenue = Number(parsed?.CYTotalRevenueAmt || 0);
   const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
@@ -186,6 +291,15 @@ function getForensicAnalysis(parsed) {
   };
 }
 
+function extractEinFromProPublicaUrl(url) {
+  const match = String(url || "").match(/projects\.propublica\.org\/nonprofits\/organizations\/(\d+)/i);
+  return match?.[1] || null;
+}
+
+function getLatestFilingWithData(filings = []) {
+  return [...filings].sort((a, b) => Number(b.tax_prd || 0) - Number(a.tax_prd || 0))[0] || null;
+}
+
 function LabelValue({ label, value }) {
   if (!value) return null;
 
@@ -204,7 +318,10 @@ function ProPublicaUrlPanel({ nonprofitUrl, setNonprofitUrl, onLookup, loadingLo
         <div>
           <h2 className="text-xl font-semibold">Paste Nonprofit Explorer URL</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Paste a ProPublica Nonprofit Explorer organization URL and load the most recent XML filing automatically.
+            Paste a ProPublica Nonprofit Explorer organization URL and try to load the most recent XML filing automatically.
+          </p>
+          <p className="mt-2 text-xs text-emerald-700">
+            This lookup now expects your app to have a backend endpoint at <span className="font-semibold">/api/propublica-990-parse</span> that fetches ProPublica server-side and returns structured JSON.
           </p>
         </div>
         <button
@@ -212,7 +329,7 @@ function ProPublicaUrlPanel({ nonprofitUrl, setNonprofitUrl, onLookup, loadingLo
           className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={loadingLookup}
         >
-          {loadingLookup ? "Loading..." : "Load From URL"}
+          {loadingLookup ? "Searching ProPublica..." : "Load From URL"}
         </button>
       </div>
 
@@ -260,19 +377,22 @@ function PasteXmlPanel({ xmlInput, setXmlInput, onParse }) {
 }
 
 export default function IRS990XmlParserApp() {
-  const [xmlInput, setXmlInput] = useState(`Paste IRS 990 XML here if you want to test the parser manually.`);
+  const [xmlInput, setXmlInput] = useState(`Paste IRS 990 XML here if you want to test the parser manually.
+
+For production use, the ProPublica URL lookup should call your backend endpoint instead of fetching ProPublica directly from the browser.`);
   const [nonprofitUrl, setNonprofitUrl] = useState(
     "https://projects.propublica.org/nonprofits/organizations/133846431"
   );
   const [error, setError] = useState("");
   const [parsed, setParsed] = useState(null);
-  const [loadingLookup, setLoadingLookup] = useState(false);
+    const [loadingLookup, setLoadingLookup] = useState(false);
   const [sourceMeta, setSourceMeta] = useState(null);
 
-  const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
+    const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
   const analysis = useMemo(() => getForensicAnalysis(parsed), [parsed]);
+  const serviceSignals = useMemo(() => detectServiceSignals(parsed), [parsed]);
 
-  async function loadFromProPublicaUrl() {
+    async function loadFromProPublicaUrl() {
     try {
       setLoadingLookup(true);
       setError("");
@@ -281,18 +401,24 @@ export default function IRS990XmlParserApp() {
         throw new Error("Please paste a ProPublica Nonprofit Explorer URL.");
       }
 
+      // IMPORTANT: The browser cannot fetch ProPublica XML directly due to CORS.
+      // This call expects a backend endpoint that performs the fetch server-side.
+      // Example endpoint: /api/propublica-990-parse
+
       const response = await fetch(`/api/propublica-990-parse?url=${encodeURIComponent(nonprofitUrl)}`);
-      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Backend lookup failed.");
+        throw new Error("Backend lookup failed. The /api/propublica-990-parse endpoint may not be running.");
       }
+
+      const data = await response.json();
 
       if (!data?.xmlText) {
         throw new Error("The backend did not return XML data.");
       }
 
       const xmlText = data.xmlText;
+
       setXmlInput(xmlText);
 
       setSourceMeta({
@@ -329,7 +455,7 @@ export default function IRS990XmlParserApp() {
     }
   }
 
-  const summaryCards = useMemo(() => {
+    const summaryCards = useMemo(() => {
     if (!parsed) return [];
     return [
       { label: "Current Year Revenue", value: formatMoney(parsed.CYTotalRevenueAmt) },
@@ -348,7 +474,7 @@ export default function IRS990XmlParserApp() {
           <h1 className="text-3xl font-bold tracking-tight">IRS 990 XML Parser</h1>
           <p className="mt-2 max-w-4xl text-sm text-slate-600">
             Paste a ProPublica Nonprofit Explorer URL or paste raw XML to extract revenue, books and records detail,
-            contractor compensation, and a quick forensic accountant style readout.
+            contractor compensation, and a quick forensic accountant style readout. The URL lookup is now wired for a backend endpoint.
           </p>
         </div>
 
@@ -411,9 +537,58 @@ export default function IRS990XmlParserApp() {
                     <p key={index}>{finding}</p>
                   ))}
                 </div>
-              </div>
-            </div>
 
+              <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-amber-950">Detected Vendors & Finance Signals</h3>
+                    <p className="mt-1 text-sm text-amber-900">
+                      Signals are based on the service description inside contractor records.
+                    </p>
+                  </div>
+                  <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-900 border border-amber-300">
+                    Outsourcing Likelihood: {serviceSignals.outsourcingLikelihood}
+                  </div>
+                </div>
+
+                {serviceSignals.summarySignals.length ? (
+                  <div className="mt-4 space-y-2">
+                    {serviceSignals.summarySignals.map((signal, index) => (
+                      <div key={index} className="rounded-xl bg-white p-3 text-sm text-slate-800 border border-amber-200">
+                        {signal}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-xl bg-white p-3 text-sm text-slate-600 border border-amber-200">
+                    No finance-related service keywords detected in contractor descriptions.
+                  </div>
+                )}
+
+                {serviceSignals.detectedVendors.length ? (
+                  <div className="mt-4 space-y-3">
+                    {serviceSignals.detectedVendors.map((vendor, index) => (
+                      <div key={`${vendor.vendorName}-${index}`} className="rounded-xl bg-white p-4 border border-amber-200">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900">{vendor.vendorName}</div>
+                            <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">{vendor.category}</div>
+                          </div>
+                          {vendor.compensation ? (
+                            <div className="text-sm font-semibold text-slate-900">{formatMoney(vendor.compensation)}</div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-sm text-slate-700">{vendor.reason}</div>
+                        {vendor.services ? (
+                          <div className="mt-1 text-sm text-slate-600">Service text: {vendor.services}</div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+            </div>
             <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
               <div className="space-y-6">
                 <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
