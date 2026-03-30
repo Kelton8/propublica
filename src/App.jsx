@@ -26,7 +26,9 @@ function allByLocalName(root, localName) {
 
 function removeBlankFields(obj) {
   if (!obj || typeof obj !== "object") return obj;
-  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== "" && value != null));
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== "" && value != null)
+  );
 }
 
 function parseBooksInCareOf(detailNode) {
@@ -89,7 +91,7 @@ function parse990Xml(xmlString) {
 }
 
 function formatMoney(value) {
-  if (!value) return null;
+  if (!value) return "—";
   const num = Number(String(value).replace(/,/g, ""));
   if (Number.isNaN(num)) return value;
   return new Intl.NumberFormat("en-US", {
@@ -116,18 +118,135 @@ function getContractorAddress(contractor) {
   const parts = [
     contractor.AddressLine1Txt,
     contractor.AddressLine2Txt,
-    [contractor.CityNm, contractor.StateAbbreviationCd, contractor.ZIPCd].filter(Boolean).join(", "),
+    [contractor.CityNm, contractor.StateAbbreviationCd, contractor.ZIPCd]
+      .filter(Boolean)
+      .join(", "),
     contractor.CountryCd,
   ].filter(Boolean);
 
   return parts.length ? parts.join(" • ") : null;
 }
 
+function detectServiceSignals(parsed) {
+  if (!parsed) {
+    return {
+      detectedVendors: [],
+      summarySignals: [],
+      outsourcingLikelihood: "Low",
+    };
+  }
+
+  const serviceRules = [
+    {
+      category: "Business Management",
+      patterns: [
+        "business management",
+        "management services",
+        "school management",
+        "charter management",
+        "back office",
+        "business office",
+      ],
+      signal: "Potential outsourced business management relationship",
+    },
+    {
+      category: "Accounting / Financial Services",
+      patterns: [
+        "accounting",
+        "financial services",
+        "finance services",
+        "bookkeeping",
+        "general ledger",
+        "accounts payable",
+        "accounts receivable",
+        "fiscal services",
+        "controller services",
+        "cfo services",
+        "finance",
+      ],
+      signal: "Potential outsourced finance or accounting relationship",
+    },
+    {
+      category: "Payroll / HR",
+      patterns: [
+        "payroll",
+        "human resources",
+        "hr services",
+        "benefits administration",
+        "retirement services",
+      ],
+      signal: "Potential outsourced payroll or HR relationship",
+    },
+    {
+      category: "Audit / Tax",
+      patterns: [
+        "audit",
+        "auditing",
+        "tax preparation",
+        "tax services",
+        "assurance services",
+        "financial statement",
+      ],
+      signal: "Professional audit or tax support detected",
+    },
+  ];
+
+  const contractors = parsed.ContractorCompensationGrp || [];
+  const detectedVendors = [];
+  const summarySignals = new Set();
+  let outsourcingScore = 0;
+
+  contractors.forEach((contractor) => {
+    const serviceText = String(contractor.ServicesDesc || "").toLowerCase();
+    if (!serviceText) return;
+
+    serviceRules.forEach((rule) => {
+      const matchedPattern = rule.patterns.find((pattern) =>
+        serviceText.includes(pattern)
+      );
+      if (!matchedPattern) return;
+
+      detectedVendors.push({
+        vendorName:
+          contractor.BusinessNameLine1Txt ||
+          contractor.PersonNm ||
+          `Contractor ${contractor.id}`,
+        category: rule.category,
+        reason: `Matched keyword: ${matchedPattern}`,
+        services: contractor.ServicesDesc,
+        compensation: contractor.CompensationAmt,
+      });
+
+      summarySignals.add(rule.signal);
+
+      if (
+        rule.category === "Business Management" ||
+        rule.category === "Accounting / Financial Services"
+      ) {
+        outsourcingScore += 2;
+      } else {
+        outsourcingScore += 1;
+      }
+    });
+  });
+
+  let outsourcingLikelihood = "Low";
+  if (outsourcingScore >= 4) outsourcingLikelihood = "High";
+  else if (outsourcingScore >= 2) outsourcingLikelihood = "Medium";
+
+  return {
+    detectedVendors,
+    summarySignals: [...summarySignals],
+    outsourcingLikelihood,
+  };
+}
+
 function getGrade(parsed) {
   const revenue = Number(parsed?.CYTotalRevenueAmt || 0);
   const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
   const hasBooksCustodian = Boolean(
-    parsed?.BooksInCareOfDetail?.PersonNm || parsed?.BooksInCareOfDetail?.BusinessNameLine1Txt
+    parsed?.BooksInCareOfDetail?.PersonNm ||
+      parsed?.BooksInCareOfDetail?.BusinessNameLine1Txt
   );
 
   if (revenue > 10000000 && hasBooksCustodian && contractorCount >= 3) return "A-";
@@ -153,31 +272,35 @@ function getForensicAnalysis(parsed) {
   const findings = [];
 
   if (revenue > 0) {
-    findings.push(`Current year revenue reported: ${formatMoney(revenue)}.`);
+    findings.push(`Current year revenue reported: ${formatMoney(revenue)}`);
   }
 
   if (books?.PersonNm || books?.BusinessNameLine1Txt) {
     findings.push(
-      `Books and records appear to be assigned to ${books.PersonNm || books.BusinessNameLine1Txt}, which is a positive governance signal.`
+      `Books and records held by ${books.PersonNm || books.BusinessNameLine1Txt}`
     );
   } else {
-    findings.push("No clear books-and-records custodian was detected in the extracted detail, which should be reviewed.");
+    findings.push("No clear books and records custodian detected");
   }
 
   if (contractors.length) {
-    findings.push(`The filing lists ${contractors.length} independent contractor record${contractors.length === 1 ? "" : "s"}.`);
+    findings.push(`${contractors.length} independent contractor relationship${contractors.length === 1 ? "" : "s"} detected`);
   } else {
-    findings.push("No contractor compensation entries were found in the extracted section.");
+    findings.push("No contractor compensation entries detected");
   }
 
   if (largestContractor?.numericComp > 0) {
     findings.push(
-      `Largest listed contractor payment appears to be ${formatMoney(largestContractor.numericComp)} to ${largestContractor.BusinessNameLine1Txt || largestContractor.PersonNm || "an identified vendor"}.`
+      `Largest contractor payment: ${
+        largestContractor.BusinessNameLine1Txt ||
+        largestContractor.PersonNm ||
+        "Unknown vendor"
+      } (${formatMoney(largestContractor.numericComp)})`
     );
   }
 
   findings.push(
-    "This is a limited structural review of the XML extract, not a full forensic opinion. Stronger grading would also require balance sheet, liquidity, debt, and change-in-net-assets context."
+    "Note: This is a structural interpretation of the filing, not a full audit."
   );
 
   return {
@@ -186,91 +309,152 @@ function getForensicAnalysis(parsed) {
   };
 }
 
-function LabelValue({ label, value }) {
-  if (!value) return null;
+function getGradeBadgeClasses(grade) {
+  if (!grade) return "bg-slate-100 text-slate-700 border-slate-200";
+  const normalized = String(grade).charAt(0).toUpperCase();
 
+  if (normalized === "A") return "bg-green-50 text-green-700 border-green-200";
+  if (normalized === "B") return "bg-cyan-50 text-cyan-700 border-cyan-200";
+  if (normalized === "C") return "bg-amber-50 text-amber-700 border-amber-200";
+  if (normalized === "D") return "bg-orange-50 text-orange-700 border-orange-200";
+  if (normalized === "F") return "bg-red-50 text-red-700 border-red-200";
+
+  return "bg-slate-100 text-slate-700 border-slate-200";
+}
+
+function cardClass(extra = "") {
+  return `rounded-[10px] border border-[#E5E7EB] bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ${extra}`;
+}
+
+function IconDollar() {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-2 text-sm text-slate-900 break-words">{value}</div>
-    </div>
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 2v20M17 6.5c0-1.9-2.2-3.5-5-3.5s-5 1.6-5 3.5 1.5 2.8 5 3.5 5 1.6 5 3.5-2.2 3.5-5 3.5-5-1.6-5-3.5" />
+    </svg>
   );
 }
 
-function ProPublicaUrlPanel({ nonprofitUrl, setNonprofitUrl, onLookup, loadingLookup }) {
+function IconBadge() {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Paste Nonprofit Explorer URL</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Paste a ProPublica Nonprofit Explorer organization URL and load the most recent XML filing automatically.
-          </p>
-        </div>
-        <button
-          onClick={onLookup}
-          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={loadingLookup}
-        >
-          {loadingLookup ? "Loading..." : "Load From URL"}
-        </button>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-        <input
-          type="url"
-          value={nonprofitUrl}
-          onChange={(e) => setNonprofitUrl(e.target.value)}
-          placeholder="https://projects.propublica.org/nonprofits/organizations/133846431"
-          className="w-full rounded-2xl border border-slate-300 bg-white p-4 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-        />
-      </div>
-    </div>
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3l2.2 2.2 3.1-.4.4 3.1L20 10l-2.2 2.2.4 3.1-3.1.4L12 18l-2.2-2.2-3.1.4-.4-3.1L4 10l2.2-2.2-.4-3.1 3.1-.4L12 3z" />
+    </svg>
   );
 }
 
-function PasteXmlPanel({ xmlInput, setXmlInput, onParse }) {
+function IconUsers() {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Paste XML Copy</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Paste raw IRS 990 XML directly into the box below, then click parse.
-          </p>
-        </div>
-        <button
-          onClick={onParse}
-          className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90"
-        >
-          Parse Pasted XML
-        </button>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-        <textarea
-          value={xmlInput}
-          onChange={(e) => setXmlInput(e.target.value)}
-          placeholder="Paste your full XML copy here..."
-          className="h-[420px] w-full rounded-2xl border border-slate-300 bg-white p-4 font-mono text-xs leading-5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
-      </div>
-    </div>
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+      <circle cx="9.5" cy="7" r="3.5" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a3.5 3.5 0 0 1 0 6.74" />
+    </svg>
   );
+}
+
+function IconShield() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3l7 3v6c0 5-3.4 8.7-7 10-3.6-1.3-7-5-7-10V6l7-3z" />
+    </svg>
+  );
+}
+
+function IconRadar() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <path d="M12 12l6-6" />
+    </svg>
+  );
+}
+
+function exportFinancialSummary(parsed, analysis, serviceSignals) {
+  if (!parsed) return;
+
+  const lines = [
+    "IRS 990 Financial Summary",
+    "",
+    `Revenue: ${formatMoney(parsed.CYTotalRevenueAmt)}`,
+    `Financial Grade: ${analysis?.grade || "—"}`,
+    `Independent Contractors: ${parsed.ContractorCompensationGrp?.length || 0}`,
+    `Books & Records Custodian: ${
+      parsed.BooksInCareOfDetail?.PersonNm ||
+      parsed.BooksInCareOfDetail?.BusinessNameLine1Txt ||
+      "—"
+    }`,
+    "",
+    "AI Financial Interpretation",
+    ...(analysis?.findings || []).map((f) => `• ${f}`),
+    "",
+    "Vendor & Finance Signals",
+    `Outsourcing Likelihood: ${serviceSignals?.outsourcingLikelihood || "Low"}`,
+    ...(serviceSignals?.summarySignals || []).map((s) => `• ${s}`),
+  ];
+
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "irs-990-financial-summary.txt";
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function IRS990XmlParserApp() {
-  const [xmlInput, setXmlInput] = useState(`Paste IRS 990 XML here if you want to test the parser manually.`);
+  const [xmlInput, setXmlInput] = useState(`Paste IRS 990 XML here if you want to test the parser manually.
+
+For production use, the ProPublica URL lookup should call your backend endpoint instead of fetching ProPublica directly from the browser.`);
   const [nonprofitUrl, setNonprofitUrl] = useState(
     "https://projects.propublica.org/nonprofits/organizations/133846431"
   );
   const [error, setError] = useState("");
   const [parsed, setParsed] = useState(null);
   const [loadingLookup, setLoadingLookup] = useState(false);
+  const [loadingParse, setLoadingParse] = useState(false);
   const [sourceMeta, setSourceMeta] = useState(null);
+  const [showRawXml, setShowRawXml] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: "CompensationAmt", direction: "desc" });
 
   const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
   const analysis = useMemo(() => getForensicAnalysis(parsed), [parsed]);
+  const serviceSignals = useMemo(() => detectServiceSignals(parsed), [parsed]);
+
+  const sortedContractors = useMemo(() => {
+    const contractors = [...(parsed?.ContractorCompensationGrp || [])];
+    const { key, direction } = sortConfig;
+
+    contractors.sort((a, b) => {
+      let aVal = a[key] || "";
+      let bVal = b[key] || "";
+
+      if (key === "CompensationAmt") {
+        aVal = Number(String(aVal).replace(/,/g, "")) || 0;
+        bVal = Number(String(bVal).replace(/,/g, "")) || 0;
+      } else {
+        aVal = String(aVal).toLowerCase();
+        bVal = String(bVal).toLowerCase();
+      }
+
+      if (aVal < bVal) return direction === "asc" ? -1 : 1;
+      if (aVal > bVal) return direction === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return contractors;
+  }, [parsed, sortConfig]);
+
+  function handleSort(key) {
+    setSortConfig((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: key === "CompensationAmt" ? "desc" : "asc" };
+    });
+  }
 
   async function loadFromProPublicaUrl() {
     try {
@@ -281,12 +465,17 @@ export default function IRS990XmlParserApp() {
         throw new Error("Please paste a ProPublica Nonprofit Explorer URL.");
       }
 
-      const response = await fetch(`/api/propublica-990-parse?url=${encodeURIComponent(nonprofitUrl)}`);
-      const data = await response.json();
+      const response = await fetch(
+        `/api/propublica-990-parse?url=${encodeURIComponent(nonprofitUrl)}`
+      );
 
       if (!response.ok) {
-        throw new Error(data.error || "Backend lookup failed.");
+        throw new Error(
+          "Backend lookup failed. The /api/propublica-990-parse endpoint may not be running."
+        );
       }
+
+      const data = await response.json();
 
       if (!data?.xmlText) {
         throw new Error("The backend did not return XML data.");
@@ -316,6 +505,7 @@ export default function IRS990XmlParserApp() {
 
   function handleParse() {
     try {
+      setLoadingParse(true);
       setError("");
       setSourceMeta({
         method: "pasted-xml",
@@ -326,176 +516,386 @@ export default function IRS990XmlParserApp() {
     } catch (err) {
       setParsed(null);
       setError(err.message || "Unable to parse XML.");
+    } finally {
+      setLoadingParse(false);
     }
   }
 
-  const summaryCards = useMemo(() => {
-    if (!parsed) return [];
+  const metrics = useMemo(() => {
     return [
-      { label: "Current Year Revenue", value: formatMoney(parsed.CYTotalRevenueAmt) },
       {
-        label: "Books In Care Of",
-        value: parsed.BooksInCareOfDetail?.PersonNm || parsed.BooksInCareOfDetail?.BusinessNameLine1Txt,
+        label: "Revenue",
+        value: parsed ? formatMoney(parsed.CYTotalRevenueAmt) : "—",
+        icon: <IconDollar />,
       },
-      { label: "Contractor Records", value: contractorCount ? String(contractorCount) : null },
-    ].filter((item) => item.value);
-  }, [parsed, contractorCount]);
+      {
+        label: "Financial Grade",
+        value: analysis?.grade || "—",
+        icon: <IconBadge />,
+      },
+      {
+        label: "Independent Contractors",
+        value: parsed ? `${contractorCount} contractor${contractorCount === 1 ? "" : "s"}` : "—",
+        icon: <IconUsers />,
+      },
+      {
+        label: "Books & Records Custodian",
+        value:
+          parsed?.BooksInCareOfDetail?.PersonNm ||
+          parsed?.BooksInCareOfDetail?.BusinessNameLine1Txt ||
+          "—",
+        icon: <IconShield />,
+      },
+    ];
+  }, [parsed, analysis, contractorCount]);
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h1 className="text-3xl font-bold tracking-tight">IRS 990 XML Parser</h1>
-          <p className="mt-2 max-w-4xl text-sm text-slate-600">
-            Paste a ProPublica Nonprofit Explorer URL or paste raw XML to extract revenue, books and records detail,
-            contractor compensation, and a quick forensic accountant style readout.
+    <div
+      className="min-h-screen bg-[#F7F8FA] text-slate-900"
+      style={{ fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}
+    >
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
+            IRS 990 Financial Analyzer
+          </h1>
+          <p className="mt-2 text-sm font-normal text-slate-600">
+            Upload or paste a ProPublica filing to analyze nonprofit financial signals
           </p>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-2">
-          <ProPublicaUrlPanel
-            nonprofitUrl={nonprofitUrl}
-            setNonprofitUrl={setNonprofitUrl}
-            onLookup={loadFromProPublicaUrl}
-            loadingLookup={loadingLookup}
-          />
-          <PasteXmlPanel xmlInput={xmlInput} setXmlInput={setXmlInput} onParse={handleParse} />
+        <div className={cardClass("mb-8")}>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+            <div className="xl:col-span-5">
+              <div className="mb-3 text-sm font-medium text-slate-700">ProPublica URL</div>
+              <input
+                type="url"
+                value={nonprofitUrl}
+                onChange={(e) => setNonprofitUrl(e.target.value)}
+                placeholder="https://projects.propublica.org/nonprofits/organizations/133846431"
+                className="w-full rounded-[10px] border border-[#E5E7EB] bg-white px-4 py-3 text-sm outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-blue-100"
+              />
+              <button
+                onClick={loadFromProPublicaUrl}
+                disabled={loadingLookup}
+                className="mt-4 inline-flex items-center rounded-[10px] bg-[#2563EB] px-4 py-2.5 text-sm font-medium text-white hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingLookup ? "Parsing IRS Filing..." : "Load Filing"}
+              </button>
+            </div>
+
+            <div className="xl:col-span-7">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-sm font-medium text-slate-700">XML Input</div>
+                <button
+                  type="button"
+                  onClick={() => setShowRawXml((prev) => !prev)}
+                  className="text-sm font-medium text-[#2563EB]"
+                >
+                  {showRawXml ? "Hide Raw XML" : "Show Raw XML"}
+                </button>
+              </div>
+
+              {showRawXml ? (
+                <textarea
+                  value={xmlInput}
+                  onChange={(e) => setXmlInput(e.target.value)}
+                  placeholder="Paste your full XML copy here..."
+                  className="h-[280px] w-full rounded-[10px] border border-[#E5E7EB] bg-white p-4 font-mono text-xs leading-5 outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-blue-100"
+                />
+              ) : (
+                <div className="rounded-[10px] border border-dashed border-[#E5E7EB] bg-slate-50 px-4 py-8 text-sm text-slate-500">
+                  Raw XML hidden for easier scanning. Toggle “Show Raw XML” to view or edit.
+                </div>
+              )}
+
+              <button
+                onClick={handleParse}
+                disabled={loadingParse}
+                className="mt-4 inline-flex items-center rounded-[10px] border border-[#E5E7EB] bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingParse ? "Parsing IRS Filing..." : "Parse XML"}
+              </button>
+            </div>
+          </div>
         </div>
 
         {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+          <div className="mb-8 rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-[#DC2626]">
+            {error}
+          </div>
         ) : null}
 
-        {parsed ? (
-          <div className="space-y-6">
-            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-                    Forensic Accountant Panel
-                  </div>
-                  <h2 className="mt-1 text-2xl font-bold">Initial Fiscal Read</h2>
-                  <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                    A fast interpretation of the extracted filing data to help spot basic governance and vendor-payment signals.
-                  </p>
-                </div>
-                <div className="rounded-3xl bg-slate-900 px-6 py-5 text-white shadow-sm">
-                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Financial Grade</div>
-                  <div className="mt-2 text-4xl font-bold">{analysis?.grade}</div>
-                </div>
+        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+          {metrics.map((metric) => (
+            <div key={metric.label} className={cardClass()}>
+              <div className="flex items-center gap-3 text-[#2563EB]">
+                {metric.icon}
+                <div className="text-sm font-medium text-slate-600">{metric.label}</div>
               </div>
 
-              {sourceMeta ? (
-                <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                  <div className="font-semibold">Source</div>
-                  <div className="mt-1">{sourceMeta.sourceLabel}</div>
-                  {sourceMeta.orgName ? <div className="mt-1">Organization: {sourceMeta.orgName}</div> : null}
-                  {sourceMeta.filingYear ? <div className="mt-1">Most recent filing year: {sourceMeta.filingYear}</div> : null}
-                  {sourceMeta.organizationUrl ? (
-                    <div className="mt-1 break-all">Explorer URL: {sourceMeta.organizationUrl}</div>
-                  ) : null}
-                  {sourceMeta.xmlUrl ? <div className="mt-1 break-all">XML URL: {sourceMeta.xmlUrl}</div> : null}
-                </div>
-              ) : null}
-
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                {summaryCards.map((card) => (
-                  <LabelValue key={card.label} label={card.label} value={card.value} />
-                ))}
-              </div>
-
-              <div className="mt-6 rounded-2xl bg-slate-50 p-5">
-                <h3 className="text-base font-semibold">Analysis</h3>
-                <div className="mt-3 space-y-3 text-sm leading-6 text-slate-700">
-                  {analysis?.findings?.map((finding, index) => (
-                    <p key={index}>{finding}</p>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-              <div className="space-y-6">
-                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-xl font-semibold">Books and Records</h2>
-                      <p className="mt-1 text-sm text-slate-600">Who appears to hold the organization’s books and records.</p>
-                    </div>
-                  </div>
-
-                  {parsed.BooksInCareOfDetail && Object.keys(parsed.BooksInCareOfDetail).length ? (
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <LabelValue label="Person Name" value={parsed.BooksInCareOfDetail.PersonNm} />
-                      <LabelValue label="Business Name 1" value={parsed.BooksInCareOfDetail.BusinessNameLine1Txt} />
-                      <LabelValue label="Business Name 2" value={parsed.BooksInCareOfDetail.BusinessNameLine2Txt} />
-                      <LabelValue
-                        label="Phone"
-                        value={parsed.BooksInCareOfDetail.PhoneNum || parsed.BooksInCareOfDetail.ForeignPhoneNum}
-                      />
-                      <div className="sm:col-span-2">
-                        <LabelValue label="Address" value={formatAddress(parsed.BooksInCareOfDetail)} />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">
-                      No books and records detail was found.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-xl font-semibold">Independent Contractors</h2>
-                    <p className="mt-1 text-sm text-slate-600">Compensation records extracted from ContractorCompensationGrp.</p>
-                  </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                    {contractorCount} contractor{contractorCount === 1 ? "" : "s"}
+              {metric.label === "Financial Grade" ? (
+                <div className="mt-4">
+                  <span
+                    className={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${getGradeBadgeClasses(
+                      metric.value
+                    )}`}
+                  >
+                    {metric.value}
                   </span>
                 </div>
+              ) : (
+                <div className="mt-4 text-2xl font-semibold tracking-tight text-slate-950">
+                  {metric.value}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
 
-                {contractorCount === 0 ? (
-                  <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No contractor records found.</div>
-                ) : (
-                  <div className="mt-5 space-y-4">
-                    {parsed.ContractorCompensationGrp.map((contractor) => {
-                      const title = contractor.BusinessNameLine1Txt || contractor.PersonNm || `Contractor ${contractor.id}`;
-                      return (
-                        <div key={contractor.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                              <div className="text-base font-semibold text-slate-900">{title}</div>
-                              {contractor.BusinessNameLine2Txt ? (
-                                <div className="mt-1 text-sm text-slate-600">{contractor.BusinessNameLine2Txt}</div>
-                              ) : null}
-                            </div>
-                            {contractor.CompensationAmt ? (
-                              <div className="text-sm font-semibold text-slate-900">
-                                {formatMoney(contractor.CompensationAmt)}
-                              </div>
-                            ) : null}
-                          </div>
+        <div className="mb-8 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => exportFinancialSummary(parsed, analysis, serviceSignals)}
+            disabled={!parsed}
+            className="rounded-[10px] border border-[#E5E7EB] bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Export Financial Summary (PDF)
+          </button>
+        </div>
 
-                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                            <LabelValue label="Contact" value={contractor.PersonNm} />
-                            <LabelValue label="Services" value={contractor.ServicesDesc} />
-                            <div className="sm:col-span-2">
-                              <LabelValue label="Address" value={getContractorAddress(contractor)} />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+        {parsed ? (
+          <>
+            <div className="mb-8 grid grid-cols-1 gap-6 xl:grid-cols-12">
+              <div className="xl:col-span-8">
+                <div className={cardClass("bg-blue-50/60")}>
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-950">
+                        AI Financial Interpretation
+                      </h2>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Analysis Confidence: Moderate
+                      </p>
+                    </div>
+                    <div className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-[#2563EB]">
+                      {analysis?.grade || "—"} grade
+                    </div>
                   </div>
-                )}
+
+                  <div className="mt-5 space-y-3">
+                    {analysis?.findings?.map((finding, index) => (
+                      <div key={index} className="flex items-start gap-3 text-sm text-slate-700">
+                        <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#2563EB]" />
+                        <span>{finding}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="xl:col-span-4">
+                <div className={cardClass()}>
+                  <div className="flex items-center gap-3 text-slate-900">
+                    <IconShield />
+                    <h2 className="text-lg font-semibold">Books & Records Custodian</h2>
+                  </div>
+
+                  <div className="mt-5 space-y-4 text-sm text-slate-700">
+                    <div>
+                      <div className="font-medium text-slate-500">Name</div>
+                      <div className="mt-1">
+                        {parsed.BooksInCareOfDetail?.PersonNm ||
+                          parsed.BooksInCareOfDetail?.BusinessNameLine1Txt ||
+                          "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-500">Phone</div>
+                      <div className="mt-1">
+                        {parsed.BooksInCareOfDetail?.PhoneNum ||
+                          parsed.BooksInCareOfDetail?.ForeignPhoneNum ||
+                          "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-500">Address</div>
+                      <div className="mt-1">
+                        {formatAddress(parsed.BooksInCareOfDetail) || "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+
+            <div className="mb-8">
+              <div className={cardClass()}>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 text-slate-900">
+                    <IconRadar />
+                    <div>
+                      <h2 className="text-lg font-semibold">Vendor & Finance Signals</h2>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Service-keyword detection across contractor records
+                      </p>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                      serviceSignals.outsourcingLikelihood === "High"
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : serviceSignals.outsourcingLikelihood === "Medium"
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-green-200 bg-green-50 text-green-700"
+                    }`}
+                  >
+                    Outsourcing Likelihood: {serviceSignals.outsourcingLikelihood}
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {serviceSignals.summarySignals.length ? (
+                    serviceSignals.summarySignals.map((signal, index) => (
+                      <span
+                        key={index}
+                        className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-[#2563EB]"
+                      >
+                        Prospecting Signal Detected
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-sm text-slate-500">
+                      No finance-related service keywords detected.
+                    </span>
+                  )}
+                </div>
+
+                {serviceSignals.detectedVendors.length ? (
+                  <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    {serviceSignals.detectedVendors.map((vendor, index) => (
+                      <div
+                        key={`${vendor.vendorName}-${index}`}
+                        className="rounded-[10px] border border-[#E5E7EB] bg-white p-4"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-base font-semibold text-slate-950">
+                              {vendor.vendorName}
+                            </div>
+                            <div className="mt-1 text-sm text-slate-500">
+                              Service: {vendor.category}
+                            </div>
+                          </div>
+                          <div className="text-sm font-semibold text-slate-950">
+                            {formatMoney(vendor.compensation)}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 space-y-2 text-sm text-slate-700">
+                          <div>
+                            <span className="font-medium text-slate-500">Signal: </span>
+                            {vendor.reason}
+                          </div>
+                          <div>
+                            <span className="font-medium text-slate-500">Matched Keywords: </span>
+                            {vendor.services || "—"}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mb-8">
+              <div className={cardClass()}>
+                <div className="mb-5 flex items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-950">
+                      Independent Contractors
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Sortable contractor table with vendor, service, amount, and location
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-separate border-spacing-0">
+                    <thead>
+                      <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                        <th
+                          className="cursor-pointer border-b border-[#E5E7EB] px-4 py-3"
+                          onClick={() => handleSort("BusinessNameLine1Txt")}
+                        >
+                          Vendor
+                        </th>
+                        <th
+                          className="cursor-pointer border-b border-[#E5E7EB] px-4 py-3"
+                          onClick={() => handleSort("ServicesDesc")}
+                        >
+                          Service
+                        </th>
+                        <th
+                          className="cursor-pointer border-b border-[#E5E7EB] px-4 py-3 text-right"
+                          onClick={() => handleSort("CompensationAmt")}
+                        >
+                          Amount
+                        </th>
+                        <th
+                          className="cursor-pointer border-b border-[#E5E7EB] px-4 py-3"
+                          onClick={() => handleSort("CityNm")}
+                        >
+                          Location
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedContractors.length ? (
+                        sortedContractors.map((contractor) => (
+                          <tr
+                            key={contractor.id}
+                            className="transition-colors hover:bg-slate-50"
+                          >
+                            <td className="border-b border-[#E5E7EB] px-4 py-4 text-sm font-medium text-slate-900">
+                              {contractor.BusinessNameLine1Txt ||
+                                contractor.PersonNm ||
+                                `Contractor ${contractor.id}`}
+                            </td>
+                            <td className="border-b border-[#E5E7EB] px-4 py-4 text-sm text-slate-700">
+                              {contractor.ServicesDesc || "—"}
+                            </td>
+                            <td className="border-b border-[#E5E7EB] px-4 py-4 text-right text-sm font-medium text-slate-900">
+                              {formatMoney(contractor.CompensationAmt)}
+                            </td>
+                            <td className="border-b border-[#E5E7EB] px-4 py-4 text-sm text-slate-700">
+                              {getContractorAddress(contractor) || "—"}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="px-4 py-8 text-center text-sm text-slate-500"
+                          >
+                            No contractor records found.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </>
         ) : !error ? (
-          <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
-            No parsed results yet. Paste a ProPublica URL to test the backend lookup, or paste raw XML to test the parser manually.
+          <div className={cardClass("text-center text-sm text-slate-500")}>
+            No parsed results yet. Paste a ProPublica URL to test the backend lookup, or
+            paste raw XML to test the parser manually.
           </div>
         ) : null}
       </div>
