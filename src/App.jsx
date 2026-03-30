@@ -26,7 +26,9 @@ function allByLocalName(root, localName) {
 
 function removeBlankFields(obj) {
   if (!obj || typeof obj !== "object") return obj;
-  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== "" && value != null));
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== "" && value != null)
+  );
 }
 
 function parseBooksInCareOf(detailNode) {
@@ -116,7 +118,9 @@ function getContractorAddress(contractor) {
   const parts = [
     contractor.AddressLine1Txt,
     contractor.AddressLine2Txt,
-    [contractor.CityNm, contractor.StateAbbreviationCd, contractor.ZIPCd].filter(Boolean).join(", "),
+    [contractor.CityNm, contractor.StateAbbreviationCd, contractor.ZIPCd]
+      .filter(Boolean)
+      .join(", "),
     contractor.CountryCd,
   ].filter(Boolean);
 
@@ -124,7 +128,13 @@ function getContractorAddress(contractor) {
 }
 
 function detectServiceSignals(parsed) {
-  if (!parsed) return { detectedVendors: [], summarySignals: [], outsourcingLikelihood: "Low" };
+  if (!parsed) {
+    return {
+      detectedVendors: [],
+      summarySignals: [],
+      outsourcingLikelihood: "Low",
+    };
+  }
 
   const serviceRules = [
     {
@@ -190,7 +200,9 @@ function detectServiceSignals(parsed) {
     if (!serviceText) return;
 
     serviceRules.forEach((rule) => {
-      const matchedPattern = rule.patterns.find((pattern) => serviceText.includes(pattern));
+      const matchedPattern = rule.patterns.find((pattern) =>
+        serviceText.includes(pattern)
+      );
       if (!matchedPattern) return;
 
       detectedVendors.push({
@@ -232,7 +244,8 @@ function getGrade(parsed) {
   const revenue = Number(parsed?.CYTotalRevenueAmt || 0);
   const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
   const hasBooksCustodian = Boolean(
-    parsed?.BooksInCareOfDetail?.PersonNm || parsed?.BooksInCareOfDetail?.BusinessNameLine1Txt
+    parsed?.BooksInCareOfDetail?.PersonNm ||
+      parsed?.BooksInCareOfDetail?.BusinessNameLine1Txt
   );
 
   if (revenue > 10000000 && hasBooksCustodian && contractorCount >= 3) return "A-";
@@ -263,21 +276,37 @@ function getForensicAnalysis(parsed) {
 
   if (books?.PersonNm || books?.BusinessNameLine1Txt) {
     findings.push(
-      `Books and records appear to be assigned to ${books.PersonNm || books.BusinessNameLine1Txt}, which is a positive governance signal.`
+      `Books and records appear to be assigned to ${
+        books.PersonNm || books.BusinessNameLine1Txt
+      }, which is a positive governance signal.`
     );
   } else {
-    findings.push("No clear books-and-records custodian was detected in the extracted detail, which should be reviewed.");
+    findings.push(
+      "No clear books-and-records custodian was detected in the extracted detail, which should be reviewed."
+    );
   }
 
   if (contractors.length) {
-    findings.push(`The filing lists ${contractors.length} independent contractor record${contractors.length === 1 ? "" : "s"}.`);
+    findings.push(
+      `The filing lists ${contractors.length} independent contractor record${
+        contractors.length === 1 ? "" : "s"
+      }.`
+    );
   } else {
-    findings.push("No contractor compensation entries were found in the extracted section.");
+    findings.push(
+      "No contractor compensation entries were found in the extracted section."
+    );
   }
 
   if (largestContractor?.numericComp > 0) {
     findings.push(
-      `Largest listed contractor payment appears to be ${formatMoney(largestContractor.numericComp)} to ${largestContractor.BusinessNameLine1Txt || largestContractor.PersonNm || "an identified vendor"}.`
+      `Largest listed contractor payment appears to be ${formatMoney(
+        largestContractor.numericComp
+      )} to ${
+        largestContractor.BusinessNameLine1Txt ||
+        largestContractor.PersonNm ||
+        "an identified vendor"
+      }.`
     );
   }
 
@@ -291,21 +320,14 @@ function getForensicAnalysis(parsed) {
   };
 }
 
-function extractEinFromProPublicaUrl(url) {
-  const match = String(url || "").match(/projects\.propublica\.org\/nonprofits\/organizations\/(\d+)/i);
-  return match?.[1] || null;
-}
-
-function getLatestFilingWithData(filings = []) {
-  return [...filings].sort((a, b) => Number(b.tax_prd || 0) - Number(a.tax_prd || 0))[0] || null;
-}
-
 function LabelValue({ label, value }) {
   if (!value) return null;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
       <div className="mt-2 text-sm text-slate-900 break-words">{value}</div>
     </div>
   );
@@ -318,10 +340,13 @@ function ProPublicaUrlPanel({ nonprofitUrl, setNonprofitUrl, onLookup, loadingLo
         <div>
           <h2 className="text-xl font-semibold">Paste Nonprofit Explorer URL</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Paste a ProPublica Nonprofit Explorer organization URL and try to load the most recent XML filing automatically.
+            Paste a ProPublica Nonprofit Explorer organization URL and try to load the
+            most recent XML filing automatically.
           </p>
           <p className="mt-2 text-xs text-emerald-700">
-            This lookup now expects your app to have a backend endpoint at <span className="font-semibold">/api/propublica-990-parse</span> that fetches ProPublica server-side and returns structured JSON.
+            This lookup now expects your app to have a backend endpoint at{" "}
+            <span className="font-semibold">/api/propublica-990-parse</span> that
+            fetches ProPublica server-side and returns structured JSON.
           </p>
         </div>
         <button
@@ -385,14 +410,14 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
   );
   const [error, setError] = useState("");
   const [parsed, setParsed] = useState(null);
-    const [loadingLookup, setLoadingLookup] = useState(false);
+  const [loadingLookup, setLoadingLookup] = useState(false);
   const [sourceMeta, setSourceMeta] = useState(null);
 
-    const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
+  const contractorCount = parsed?.ContractorCompensationGrp?.length || 0;
   const analysis = useMemo(() => getForensicAnalysis(parsed), [parsed]);
   const serviceSignals = useMemo(() => detectServiceSignals(parsed), [parsed]);
 
-    async function loadFromProPublicaUrl() {
+  async function loadFromProPublicaUrl() {
     try {
       setLoadingLookup(true);
       setError("");
@@ -401,14 +426,14 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
         throw new Error("Please paste a ProPublica Nonprofit Explorer URL.");
       }
 
-      // IMPORTANT: The browser cannot fetch ProPublica XML directly due to CORS.
-      // This call expects a backend endpoint that performs the fetch server-side.
-      // Example endpoint: /api/propublica-990-parse
-
-      const response = await fetch(`/api/propublica-990-parse?url=${encodeURIComponent(nonprofitUrl)}`);
+      const response = await fetch(
+        `/api/propublica-990-parse?url=${encodeURIComponent(nonprofitUrl)}`
+      );
 
       if (!response.ok) {
-        throw new Error("Backend lookup failed. The /api/propublica-990-parse endpoint may not be running.");
+        throw new Error(
+          "Backend lookup failed. The /api/propublica-990-parse endpoint may not be running."
+        );
       }
 
       const data = await response.json();
@@ -455,13 +480,15 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
     }
   }
 
-    const summaryCards = useMemo(() => {
+  const summaryCards = useMemo(() => {
     if (!parsed) return [];
     return [
       { label: "Current Year Revenue", value: formatMoney(parsed.CYTotalRevenueAmt) },
       {
         label: "Books In Care Of",
-        value: parsed.BooksInCareOfDetail?.PersonNm || parsed.BooksInCareOfDetail?.BusinessNameLine1Txt,
+        value:
+          parsed.BooksInCareOfDetail?.PersonNm ||
+          parsed.BooksInCareOfDetail?.BusinessNameLine1Txt,
       },
       { label: "Contractor Records", value: contractorCount ? String(contractorCount) : null },
     ].filter((item) => item.value);
@@ -473,8 +500,10 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h1 className="text-3xl font-bold tracking-tight">IRS 990 XML Parser</h1>
           <p className="mt-2 max-w-4xl text-sm text-slate-600">
-            Paste a ProPublica Nonprofit Explorer URL or paste raw XML to extract revenue, books and records detail,
-            contractor compensation, and a quick forensic accountant style readout. The URL lookup is now wired for a backend endpoint.
+            Paste a ProPublica Nonprofit Explorer URL or paste raw XML to extract
+            revenue, books and records detail, contractor compensation, and a quick
+            forensic accountant style readout. The URL lookup is now wired for a backend
+            endpoint.
           </p>
         </div>
 
@@ -485,11 +514,17 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
             onLookup={loadFromProPublicaUrl}
             loadingLookup={loadingLookup}
           />
-          <PasteXmlPanel xmlInput={xmlInput} setXmlInput={setXmlInput} onParse={handleParse} />
+          <PasteXmlPanel
+            xmlInput={xmlInput}
+            setXmlInput={setXmlInput}
+            onParse={handleParse}
+          />
         </div>
 
         {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
         ) : null}
 
         {parsed ? (
@@ -502,11 +537,14 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                   </div>
                   <h2 className="mt-1 text-2xl font-bold">Initial Fiscal Read</h2>
                   <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                    A fast interpretation of the extracted filing data to help spot basic governance and vendor-payment signals.
+                    A fast interpretation of the extracted filing data to help spot
+                    basic governance and vendor-payment signals.
                   </p>
                 </div>
                 <div className="rounded-3xl bg-slate-900 px-6 py-5 text-white shadow-sm">
-                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Financial Grade</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
+                    Financial Grade
+                  </div>
                   <div className="mt-2 text-4xl font-bold">{analysis?.grade}</div>
                 </div>
               </div>
@@ -515,12 +553,22 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                 <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
                   <div className="font-semibold">Source</div>
                   <div className="mt-1">{sourceMeta.sourceLabel}</div>
-                  {sourceMeta.orgName ? <div className="mt-1">Organization: {sourceMeta.orgName}</div> : null}
-                  {sourceMeta.filingYear ? <div className="mt-1">Most recent filing year: {sourceMeta.filingYear}</div> : null}
-                  {sourceMeta.organizationUrl ? (
-                    <div className="mt-1 break-all">Explorer URL: {sourceMeta.organizationUrl}</div>
+                  {sourceMeta.orgName ? (
+                    <div className="mt-1">Organization: {sourceMeta.orgName}</div>
                   ) : null}
-                  {sourceMeta.xmlUrl ? <div className="mt-1 break-all">XML URL: {sourceMeta.xmlUrl}</div> : null}
+                  {sourceMeta.filingYear ? (
+                    <div className="mt-1">
+                      Most recent filing year: {sourceMeta.filingYear}
+                    </div>
+                  ) : null}
+                  {sourceMeta.organizationUrl ? (
+                    <div className="mt-1 break-all">
+                      Explorer URL: {sourceMeta.organizationUrl}
+                    </div>
+                  ) : null}
+                  {sourceMeta.xmlUrl ? (
+                    <div className="mt-1 break-all">XML URL: {sourceMeta.xmlUrl}</div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -537,13 +585,17 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                     <p key={index}>{finding}</p>
                   ))}
                 </div>
+              </div>
 
               <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <h3 className="text-base font-semibold text-amber-950">Detected Vendors & Finance Signals</h3>
+                    <h3 className="text-base font-semibold text-amber-950">
+                      Detected Vendors & Finance Signals
+                    </h3>
                     <p className="mt-1 text-sm text-amber-900">
-                      Signals are based on the service description inside contractor records.
+                      Signals are based on the service description inside contractor
+                      records.
                     </p>
                   </div>
                   <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-900 border border-amber-300">
@@ -554,62 +606,95 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                 {serviceSignals.summarySignals.length ? (
                   <div className="mt-4 space-y-2">
                     {serviceSignals.summarySignals.map((signal, index) => (
-                      <div key={index} className="rounded-xl bg-white p-3 text-sm text-slate-800 border border-amber-200">
+                      <div
+                        key={index}
+                        className="rounded-xl bg-white p-3 text-sm text-slate-800 border border-amber-200"
+                      >
                         {signal}
                       </div>
                     ))}
                   </div>
                 ) : (
                   <div className="mt-4 rounded-xl bg-white p-3 text-sm text-slate-600 border border-amber-200">
-                    No finance-related service keywords detected in contractor descriptions.
+                    No finance-related service keywords detected in contractor
+                    descriptions.
                   </div>
                 )}
 
                 {serviceSignals.detectedVendors.length ? (
                   <div className="mt-4 space-y-3">
                     {serviceSignals.detectedVendors.map((vendor, index) => (
-                      <div key={`${vendor.vendorName}-${index}`} className="rounded-xl bg-white p-4 border border-amber-200">
+                      <div
+                        key={`${vendor.vendorName}-${index}`}
+                        className="rounded-xl bg-white p-4 border border-amber-200"
+                      >
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                           <div>
-                            <div className="text-sm font-semibold text-slate-900">{vendor.vendorName}</div>
-                            <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">{vendor.category}</div>
+                            <div className="text-sm font-semibold text-slate-900">
+                              {vendor.vendorName}
+                            </div>
+                            <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+                              {vendor.category}
+                            </div>
                           </div>
                           {vendor.compensation ? (
-                            <div className="text-sm font-semibold text-slate-900">{formatMoney(vendor.compensation)}</div>
+                            <div className="text-sm font-semibold text-slate-900">
+                              {formatMoney(vendor.compensation)}
+                            </div>
                           ) : null}
                         </div>
                         <div className="mt-2 text-sm text-slate-700">{vendor.reason}</div>
                         {vendor.services ? (
-                          <div className="mt-1 text-sm text-slate-600">Service text: {vendor.services}</div>
+                          <div className="mt-1 text-sm text-slate-600">
+                            Service text: {vendor.services}
+                          </div>
                         ) : null}
                       </div>
                     ))}
                   </div>
                 ) : null}
               </div>
-
             </div>
+
             <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
               <div className="space-y-6">
                 <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h2 className="text-xl font-semibold">Books and Records</h2>
-                      <p className="mt-1 text-sm text-slate-600">Who appears to hold the organization’s books and records.</p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Who appears to hold the organization’s books and records.
+                      </p>
                     </div>
                   </div>
 
-                  {parsed.BooksInCareOfDetail && Object.keys(parsed.BooksInCareOfDetail).length ? (
+                  {parsed.BooksInCareOfDetail &&
+                  Object.keys(parsed.BooksInCareOfDetail).length ? (
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <LabelValue label="Person Name" value={parsed.BooksInCareOfDetail.PersonNm} />
-                      <LabelValue label="Business Name 1" value={parsed.BooksInCareOfDetail.BusinessNameLine1Txt} />
-                      <LabelValue label="Business Name 2" value={parsed.BooksInCareOfDetail.BusinessNameLine2Txt} />
+                      <LabelValue
+                        label="Person Name"
+                        value={parsed.BooksInCareOfDetail.PersonNm}
+                      />
+                      <LabelValue
+                        label="Business Name 1"
+                        value={parsed.BooksInCareOfDetail.BusinessNameLine1Txt}
+                      />
+                      <LabelValue
+                        label="Business Name 2"
+                        value={parsed.BooksInCareOfDetail.BusinessNameLine2Txt}
+                      />
                       <LabelValue
                         label="Phone"
-                        value={parsed.BooksInCareOfDetail.PhoneNum || parsed.BooksInCareOfDetail.ForeignPhoneNum}
+                        value={
+                          parsed.BooksInCareOfDetail.PhoneNum ||
+                          parsed.BooksInCareOfDetail.ForeignPhoneNum
+                        }
                       />
                       <div className="sm:col-span-2">
-                        <LabelValue label="Address" value={formatAddress(parsed.BooksInCareOfDetail)} />
+                        <LabelValue
+                          label="Address"
+                          value={formatAddress(parsed.BooksInCareOfDetail)}
+                        />
                       </div>
                     </div>
                   ) : (
@@ -624,7 +709,9 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-semibold">Independent Contractors</h2>
-                    <p className="mt-1 text-sm text-slate-600">Compensation records extracted from ContractorCompensationGrp.</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Compensation records extracted from ContractorCompensationGrp.
+                    </p>
                   </div>
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                     {contractorCount} contractor{contractorCount === 1 ? "" : "s"}
@@ -632,18 +719,30 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                 </div>
 
                 {contractorCount === 0 ? (
-                  <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No contractor records found.</div>
+                  <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">
+                    No contractor records found.
+                  </div>
                 ) : (
                   <div className="mt-5 space-y-4">
                     {parsed.ContractorCompensationGrp.map((contractor) => {
-                      const title = contractor.BusinessNameLine1Txt || contractor.PersonNm || `Contractor ${contractor.id}`;
+                      const title =
+                        contractor.BusinessNameLine1Txt ||
+                        contractor.PersonNm ||
+                        `Contractor ${contractor.id}`;
                       return (
-                        <div key={contractor.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                        <div
+                          key={contractor.id}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
+                        >
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                              <div className="text-base font-semibold text-slate-900">{title}</div>
+                              <div className="text-base font-semibold text-slate-900">
+                                {title}
+                              </div>
                               {contractor.BusinessNameLine2Txt ? (
-                                <div className="mt-1 text-sm text-slate-600">{contractor.BusinessNameLine2Txt}</div>
+                                <div className="mt-1 text-sm text-slate-600">
+                                  {contractor.BusinessNameLine2Txt}
+                                </div>
                               ) : null}
                             </div>
                             {contractor.CompensationAmt ? (
@@ -657,7 +756,10 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
                             <LabelValue label="Contact" value={contractor.PersonNm} />
                             <LabelValue label="Services" value={contractor.ServicesDesc} />
                             <div className="sm:col-span-2">
-                              <LabelValue label="Address" value={getContractorAddress(contractor)} />
+                              <LabelValue
+                                label="Address"
+                                value={getContractorAddress(contractor)}
+                              />
                             </div>
                           </div>
                         </div>
@@ -670,7 +772,8 @@ For production use, the ProPublica URL lookup should call your backend endpoint 
           </div>
         ) : !error ? (
           <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
-            No parsed results yet. Paste a ProPublica URL to test the backend lookup, or paste raw XML to test the parser manually.
+            No parsed results yet. Paste a ProPublica URL to test the backend lookup,
+            or paste raw XML to test the parser manually.
           </div>
         ) : null}
       </div>
